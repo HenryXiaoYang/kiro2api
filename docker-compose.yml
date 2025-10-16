@@ -1,6 +1,6 @@
 services:
   kiro2api:
-    image: .
+    build: .
     container_name: kiro2api
     restart: unless-stopped
     ports:
