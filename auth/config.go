@@ -1,9 +1,11 @@
 package auth
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"kiro2api/logger"
 )
@@ -150,4 +152,66 @@ func processConfigs(configs []AuthConfig) []AuthConfig {
 	}
 
 	return validConfigs
+}
+
+// LoadAccountsFromCSV 从CSV文件加载账号配置
+func LoadAccountsFromCSV(filePath string) ([]AuthConfig, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("打开CSV文件失败: %w", err)
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, fmt.Errorf("读取CSV文件失败: %w", err)
+	}
+
+	if len(records) < 2 {
+		return nil, fmt.Errorf("CSV文件为空或缺少数据行")
+	}
+
+	var configs []AuthConfig
+	for i, record := range records[1:] {
+		if len(record) < 4 {
+			logger.Warn("跳过无效的CSV行", logger.Int("行号", i+2))
+			continue
+		}
+
+		enabled := strings.ToLower(strings.TrimSpace(record[0])) == "true"
+		if !enabled {
+			continue
+		}
+
+		configs = append(configs, AuthConfig{
+			AuthType:     AuthMethodIdC,
+			RefreshToken: strings.TrimSpace(record[1]),
+			ClientID:     strings.TrimSpace(record[2]),
+			ClientSecret: strings.TrimSpace(record[3]),
+		})
+	}
+
+	logger.Info("从CSV加载账号", logger.Int("总数", len(configs)))
+	return configs, nil
+}
+
+// AddAccountsFromCSV 从CSV文件添加账号到TokenManager
+func (tm *TokenManager) AddAccountsFromCSV(filePath string) error {
+	newConfigs, err := LoadAccountsFromCSV(filePath)
+	if err != nil {
+		return err
+	}
+
+	tm.mutex.Lock()
+	defer tm.mutex.Unlock()
+
+	tm.configs = append(tm.configs, newConfigs...)
+	tm.configOrder = generateConfigOrder(tm.configs)
+
+	logger.Info("添加CSV账号到TokenManager",
+		logger.Int("新增数量", len(newConfigs)),
+		logger.Int("总配置数", len(tm.configs)))
+
+	return tm.refreshCacheUnlocked()
 }

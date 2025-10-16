@@ -19,7 +19,19 @@ func NewAuthService() (*AuthService, error) {
 	// 加载配置
 	configs, err := loadConfigs()
 	if err != nil {
-		return nil, fmt.Errorf("加载配置失败: %w", err)
+		// 尝试从CSV加载
+		if csvConfigs, csvErr := LoadAccountsFromCSV("accounts.csv"); csvErr == nil && len(csvConfigs) > 0 {
+			configs = csvConfigs
+			logger.Info("从CSV加载账号", logger.Int("数量", len(csvConfigs)))
+		} else {
+			return nil, fmt.Errorf("加载配置失败: %w", err)
+		}
+	} else {
+		// 从CSV加载额外账号
+		if csvConfigs, csvErr := LoadAccountsFromCSV("accounts.csv"); csvErr == nil {
+			configs = append(configs, csvConfigs...)
+			logger.Info("从CSV加载额外账号", logger.Int("数量", len(csvConfigs)))
+		}
 	}
 
 	if len(configs) == 0 {
