@@ -20,6 +20,7 @@ services:
       - LOG_FILE=${LOG_FILE:-}
     volumes:
       - aws_sso_cache:/home/appuser/.aws/sso/cache
+      - ./.env:/app/.env:ro
       - ./accounts.csv:/app/accounts.csv:ro
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/v1/models"]
