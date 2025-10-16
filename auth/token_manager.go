@@ -68,13 +68,6 @@ func (tm *TokenManager) getBestToken() (types.TokenInfo, error) {
 	tm.mutex.Lock()
 	defer tm.mutex.Unlock()
 
-	// 检查是否需要刷新缓存（在锁内）
-	if time.Since(tm.lastRefresh) > config.TokenCacheTTL {
-		if err := tm.refreshCacheUnlocked(); err != nil {
-			logger.Warn("刷新token缓存失败", logger.Err(err))
-		}
-	}
-
 	// 选择最优token（内部方法，不加锁）
 	bestToken := tm.selectBestTokenUnlocked()
 	if bestToken == nil {
@@ -117,13 +110,33 @@ func (tm *TokenManager) selectBestTokenUnlocked() *CachedToken {
 		if cached, exists := tm.cache.tokens[currentKey]; exists {
 			// 检查token是否过期
 			if time.Since(cached.CachedAt) > tm.cache.ttl {
-				tm.exhausted[currentKey] = true
-				tm.currentIndex = (tm.currentIndex + 1) % len(tm.configOrder)
-				continue
+				// 刷新这个token
+				if err := tm.refreshSingleTokenByIndex(tm.currentIndex); err != nil {
+					logger.Warn("刷新token失败", logger.String("key", currentKey), logger.Err(err))
+					tm.exhausted[currentKey] = true
+					tm.currentIndex = (tm.currentIndex + 1) % len(tm.configOrder)
+					continue
+				}
+				cached = tm.cache.tokens[currentKey]
 			}
 
 			// 检查token是否可用
 			if cached.IsUsable() {
+				logger.Debug("顺序策略选择token",
+					logger.String("selected_key", currentKey),
+					logger.Int("index", tm.currentIndex),
+					logger.Float64("available_count", cached.Available))
+				return cached
+			}
+		} else {
+			// token不存在，刷新它
+			if err := tm.refreshSingleTokenByIndex(tm.currentIndex); err != nil {
+				logger.Warn("刷新token失败", logger.String("key", currentKey), logger.Err(err))
+				tm.exhausted[currentKey] = true
+				tm.currentIndex = (tm.currentIndex + 1) % len(tm.configOrder)
+				continue
+			}
+			if cached, exists := tm.cache.tokens[currentKey]; exists && cached.IsUsable() {
 				logger.Debug("顺序策略选择token",
 					logger.String("selected_key", currentKey),
 					logger.Int("index", tm.currentIndex),
@@ -149,50 +162,61 @@ func (tm *TokenManager) selectBestTokenUnlocked() *CachedToken {
 	return nil
 }
 
-// refreshCacheUnlocked 刷新token缓存
+// refreshSingleTokenByIndex 刷新指定索引的token
+// 内部方法：调用者必须持有 tm.mutex
+func (tm *TokenManager) refreshSingleTokenByIndex(index int) error {
+	if index >= len(tm.configs) {
+		return fmt.Errorf("索引超出范围")
+	}
+
+	cfg := tm.configs[index]
+	if cfg.Disabled {
+		return fmt.Errorf("token已禁用")
+	}
+
+	// 刷新token
+	token, err := tm.refreshSingleToken(cfg)
+	if err != nil {
+		return fmt.Errorf("刷新token失败: %w", err)
+	}
+
+	// 检查使用限制
+	var usageInfo *types.UsageLimits
+	var available float64
+
+	checker := NewUsageLimitsChecker()
+	if usage, checkErr := checker.CheckUsageLimits(token); checkErr == nil {
+		usageInfo = usage
+		available = CalculateAvailableCount(usage)
+	} else {
+		logger.Warn("检查使用限制失败", logger.Err(checkErr))
+	}
+
+	// 更新缓存
+	cacheKey := fmt.Sprintf(config.TokenCacheKeyFormat, index)
+	tm.cache.tokens[cacheKey] = &CachedToken{
+		Token:     token,
+		UsageInfo: usageInfo,
+		CachedAt:  time.Now(),
+		Available: available,
+	}
+
+	logger.Debug("token缓存更新",
+		logger.String("cache_key", cacheKey),
+		logger.Float64("available", available))
+
+	return nil
+}
+
+// refreshCacheUnlocked 刷新所有token缓存
 // 内部方法：调用者必须持有 tm.mutex
 func (tm *TokenManager) refreshCacheUnlocked() error {
-	logger.Debug("开始刷新token缓存")
+	logger.Debug("开始刷新所有token缓存")
 
-	for i, cfg := range tm.configs {
-		if cfg.Disabled {
-			continue
+	for i := range tm.configs {
+		if err := tm.refreshSingleTokenByIndex(i); err != nil {
+			logger.Warn("刷新token失败", logger.Int("index", i), logger.Err(err))
 		}
-
-		// 刷新token
-		token, err := tm.refreshSingleToken(cfg)
-		if err != nil {
-			logger.Warn("刷新单个token失败",
-				logger.Int("config_index", i),
-				logger.String("auth_type", cfg.AuthType),
-				logger.Err(err))
-			continue
-		}
-
-		// 检查使用限制
-		var usageInfo *types.UsageLimits
-		var available float64
-
-		checker := NewUsageLimitsChecker()
-		if usage, checkErr := checker.CheckUsageLimits(token); checkErr == nil {
-			usageInfo = usage
-			available = CalculateAvailableCount(usage)
-		} else {
-			logger.Warn("检查使用限制失败", logger.Err(checkErr))
-		}
-
-		// 更新缓存（直接访问，已在tm.mutex保护下）
-		cacheKey := fmt.Sprintf(config.TokenCacheKeyFormat, i)
-		tm.cache.tokens[cacheKey] = &CachedToken{
-			Token:     token,
-			UsageInfo: usageInfo,
-			CachedAt:  time.Now(),
-			Available: available,
-		}
-
-		logger.Debug("token缓存更新",
-			logger.String("cache_key", cacheKey),
-			logger.Float64("available", available))
 	}
 
 	tm.lastRefresh = time.Now()
