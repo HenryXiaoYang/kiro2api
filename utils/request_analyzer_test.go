@@ -156,7 +156,7 @@ func TestAnalyzeRequestComplexity_WithSystemPrompt(t *testing.T) {
 				Content: "Hello",
 			},
 		},
-		System: []types.AnthropicSystemMessage{
+		System: types.AnthropicSystemMessageList{
 			{
 				Type: "text",
 				Text: longSystemPrompt, // > 2000字符, score +1

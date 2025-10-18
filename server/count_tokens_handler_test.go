@@ -101,7 +101,7 @@ func TestHandleCountTokens_Success(t *testing.T) {
 						Content: "Hello",
 					},
 				},
-				System: []types.AnthropicSystemMessage{
+				System: types.AnthropicSystemMessageList{
 					{
 						Type: "text",
 						Text: "You are a helpful assistant",

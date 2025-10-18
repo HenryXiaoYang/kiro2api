@@ -74,7 +74,7 @@ func TestTokenEstimatorAccuracy(t *testing.T) {
 		{
 			Name: "带系统提示词",
 			Request: &types.CountTokensRequest{
-				System: []types.AnthropicSystemMessage{
+				System: types.AnthropicSystemMessageList{
 					{
 						Type: "text",
 						Text: "You are a helpful assistant.",

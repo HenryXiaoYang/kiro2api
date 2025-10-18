@@ -1,5 +1,11 @@
 package types
 
+import (
+	"encoding/json"
+	"errors"
+	"strings"
+)
+
 // AnthropicTool 表示 Anthropic API 的工具结构
 type AnthropicTool struct {
 	Name        string         `json:"name"`
@@ -15,15 +21,15 @@ type ToolChoice struct {
 
 // AnthropicRequest 表示 Anthropic API 的请求结构
 type AnthropicRequest struct {
-	Model       string                    `json:"model"`
-	MaxTokens   int                       `json:"max_tokens"`
-	Messages    []AnthropicRequestMessage `json:"messages"`
-	System      []AnthropicSystemMessage  `json:"system,omitempty"`
-	Tools       []AnthropicTool           `json:"tools,omitempty"`
-	ToolChoice  any                       `json:"tool_choice,omitempty"` // 可以是string或ToolChoice对象
-	Stream      bool                      `json:"stream"`
-	Temperature *float64                  `json:"temperature,omitempty"`
-	Metadata    map[string]any            `json:"metadata,omitempty"`
+	Model       string                     `json:"model"`
+	MaxTokens   int                        `json:"max_tokens"`
+	Messages    []AnthropicRequestMessage  `json:"messages"`
+	System      AnthropicSystemMessageList `json:"system,omitempty"`
+	Tools       []AnthropicTool            `json:"tools,omitempty"`
+	ToolChoice  any                        `json:"tool_choice,omitempty"` // 可以是string或ToolChoice对象
+	Stream      bool                       `json:"stream"`
+	Temperature *float64                   `json:"temperature,omitempty"`
+	Metadata    map[string]any             `json:"metadata,omitempty"`
 }
 
 // AnthropicStreamResponse 表示 Anthropic 流式响应的结构
@@ -49,9 +55,78 @@ type AnthropicRequestMessage struct {
 	Content any    `json:"content"` // 可以是 string 或 []ContentBlock
 }
 
+type AnthropicSystemMessageList []AnthropicSystemMessage
+
 type AnthropicSystemMessage struct {
 	Type string `json:"type"`
 	Text string `json:"text"` // 可以是 string 或 []ContentBlock
+}
+
+// UnmarshalJSON 支持多种system格式：string、[]string、对象和对象数组
+func (l *AnthropicSystemMessageList) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 {
+		*l = nil
+		return nil
+	}
+
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" || trimmed == "null" {
+		*l = nil
+		return nil
+	}
+
+	// 尝试解析为标准数组格式
+	var structured []AnthropicSystemMessage
+	if err := json.Unmarshal(data, &structured); err == nil {
+		*l = structured
+		return nil
+	}
+
+	// 尝试解析为单个对象
+	var single AnthropicSystemMessage
+	if err := json.Unmarshal(data, &single); err == nil && (single.Type != "" || single.Text != "") {
+		*l = AnthropicSystemMessageList{single}
+		return nil
+	}
+
+	// 尝试解析为字符串数组
+	var simpleList []string
+	if err := json.Unmarshal(data, &simpleList); err == nil {
+		formatted := make(AnthropicSystemMessageList, 0, len(simpleList))
+		for _, entry := range simpleList {
+			if strings.TrimSpace(entry) == "" {
+				continue
+			}
+			formatted = append(formatted, AnthropicSystemMessage{
+				Type: "text",
+				Text: entry,
+			})
+		}
+		if len(formatted) == 0 {
+			*l = nil
+			return nil
+		}
+		*l = formatted
+		return nil
+	}
+
+	// 尝试解析为单个字符串
+	var simple string
+	if err := json.Unmarshal(data, &simple); err == nil {
+		if strings.TrimSpace(simple) == "" {
+			*l = nil
+			return nil
+		}
+		*l = AnthropicSystemMessageList{
+			{
+				Type: "text",
+				Text: simple,
+			},
+		}
+		return nil
+	}
+
+	return errors.New("invalid system message format")
 }
 
 // ContentBlock 表示消息内容块的结构
